@@ -700,12 +700,12 @@ export default function IndexingInAir() {
       return { ...seg, start, len, segIndex: si };
     });
 
-    const [hoveredSlot, setHoveredSlot] = useState(null);
+    const [selectedSlot, setSelectedSlot] = useState(null);
 
     return (
       <div ref={timelineRef} style={{ overflowX: "auto", padding: "8px 0" }}>
-        {/* Slot detail tooltip */}
-        {hoveredSlot !== null && hoveredSlot < timeline.length && (
+        {/* Slot detail panel — click to pin */}
+        {selectedSlot !== null && selectedSlot < timeline.length && (
           <div style={{
             background: COLORS.surface,
             border: `1px solid ${COLORS.accent}`,
@@ -718,23 +718,28 @@ export default function IndexingInAir() {
             display: "flex",
             gap: 16,
             flexWrap: "wrap",
+            alignItems: "center",
           }}>
             <span>
-              <span style={{ color: COLORS.accent }}>SLOT {hoveredSlot}</span>
+              <span style={{ color: COLORS.accent }}>SLOT {selectedSlot}</span>
               {" | "}
-              {timeline[hoveredSlot].type === "index"
-                ? <span style={{ color: timeline[hoveredSlot].replicated ? COLORS.replicated : COLORS.nonReplicated }}>Index [{timeline[hoveredSlot].nodeId}]</span>
-                : <span style={{ color: COLORS.data }}>Data [{timeline[hoveredSlot].label}] key={timeline[hoveredSlot].key}</span>
+              {timeline[selectedSlot].type === "index"
+                ? <span style={{ color: timeline[selectedSlot].replicated ? COLORS.replicated : COLORS.nonReplicated }}>Index [{timeline[selectedSlot].nodeId}]</span>
+                : <span style={{ color: COLORS.data }}>Data [{timeline[selectedSlot].label}] key={timeline[selectedSlot].key}</span>
               }
             </span>
             <span>
-              <span style={{ color: COLORS.nonReplicated }}>index_pointer:</span> {getNextIndexStart(hoveredSlot)}
+              <span style={{ color: COLORS.nonReplicated }}>index_pointer:</span> {getNextIndexStart(selectedSlot)}
               <span style={{ color: COLORS.textDim }}> (next index segment)</span>
             </span>
             <span>
               <span style={{ color: COLORS.replicated }}>bcast_pointer:</span> {totalLen}
               <span style={{ color: COLORS.textDim }}> (next broadcast cycle)</span>
             </span>
+            <span
+              onClick={() => setSelectedSlot(null)}
+              style={{ color: COLORS.textDim, cursor: "pointer", marginLeft: "auto", fontSize: 12, fontWeight: 700 }}
+            >x</span>
           </div>
         )}
         <div style={{ display: "flex", gap: 0, minWidth: "max-content" }}>
@@ -767,8 +772,8 @@ export default function IndexingInAir() {
                   <div
                     key={`i${p}`}
                     data-pos={p}
-                    onMouseEnter={() => setHoveredSlot(p)}
-                    onMouseLeave={() => setHoveredSlot(null)}
+                    onClick={() => setSelectedSlot(selectedSlot === p ? null : p)}
+                    
                     style={{
                       width: 32,
                       height: 44,
@@ -810,8 +815,8 @@ export default function IndexingInAir() {
                   <div
                     key={`d${p}`}
                     data-pos={p}
-                    onMouseEnter={() => setHoveredSlot(p)}
-                    onMouseLeave={() => setHoveredSlot(null)}
+                    onClick={() => setSelectedSlot(selectedSlot === p ? null : p)}
+                    
                     style={{
                       width: 32,
                       height: 44,
@@ -838,7 +843,7 @@ export default function IndexingInAir() {
           ))}
         </div>
         <p style={{ fontSize: 9, color: COLORS.textDim, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
-          Hover over any slot to see its header info (index_pointer, bcast_pointer)
+          Click any slot to see its header info (index_pointer, bcast_pointer)
         </p>
         {/* Legend */}
         <div style={{ display: "flex", gap: 14, marginTop: 6, flexWrap: "wrap" }}>
