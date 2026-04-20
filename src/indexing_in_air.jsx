@@ -657,6 +657,23 @@ export default function IndexingInAir() {
       }
     }
 
+    // Compute index_pointer for each slot (offset to next index segment start)
+    // and bcast_pointer (offset to next broadcast cycle = totalSlots)
+    const segBoundaries = [];
+    let cumPos = 0;
+    for (const seg of schedule) {
+      segBoundaries.push(cumPos); // start of this segment's index
+      cumPos += seg.indexSegment.length + seg.dataSegment.length;
+    }
+    const totalLen = cumPos;
+
+    function getNextIndexStart(currentPos) {
+      for (const b of segBoundaries) {
+        if (b > currentPos) return b;
+      }
+      return totalLen; // wraps to next broadcast
+    }
+
     // Determine highlighted positions from search
     const highlightedPositions = {};
     if (searchResult && as2 >= 0) {
@@ -683,8 +700,43 @@ export default function IndexingInAir() {
       return { ...seg, start, len, segIndex: si };
     });
 
+    const [hoveredSlot, setHoveredSlot] = useState(null);
+
     return (
       <div ref={timelineRef} style={{ overflowX: "auto", padding: "8px 0" }}>
+        {/* Slot detail tooltip */}
+        {hoveredSlot !== null && hoveredSlot < timeline.length && (
+          <div style={{
+            background: COLORS.surface,
+            border: `1px solid ${COLORS.accent}`,
+            borderRadius: 6,
+            padding: "8px 12px",
+            marginBottom: 8,
+            fontSize: 10,
+            fontFamily: "'JetBrains Mono', monospace",
+            color: COLORS.textMuted,
+            display: "flex",
+            gap: 16,
+            flexWrap: "wrap",
+          }}>
+            <span>
+              <span style={{ color: COLORS.accent }}>SLOT {hoveredSlot}</span>
+              {" | "}
+              {timeline[hoveredSlot].type === "index"
+                ? <span style={{ color: timeline[hoveredSlot].replicated ? COLORS.replicated : COLORS.nonReplicated }}>Index [{timeline[hoveredSlot].nodeId}]</span>
+                : <span style={{ color: COLORS.data }}>Data [{timeline[hoveredSlot].label}] key={timeline[hoveredSlot].key}</span>
+              }
+            </span>
+            <span>
+              <span style={{ color: COLORS.nonReplicated }}>index_pointer:</span> {getNextIndexStart(hoveredSlot)}
+              <span style={{ color: COLORS.textDim }}> (next index segment)</span>
+            </span>
+            <span>
+              <span style={{ color: COLORS.replicated }}>bcast_pointer:</span> {totalLen}
+              <span style={{ color: COLORS.textDim }}> (next broadcast cycle)</span>
+            </span>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 0, minWidth: "max-content" }}>
           {segments.map((seg, si) => (
             <div
@@ -715,6 +767,8 @@ export default function IndexingInAir() {
                   <div
                     key={`i${p}`}
                     data-pos={p}
+                    onMouseEnter={() => setHoveredSlot(p)}
+                    onMouseLeave={() => setHoveredSlot(null)}
                     style={{
                       width: 32,
                       height: 44,
@@ -730,6 +784,7 @@ export default function IndexingInAir() {
                       position: "relative",
                       borderRadius: 2,
                       margin: "0 0.5px",
+                      cursor: "pointer",
                     }}
                   >
                     <div style={{ fontWeight: 700, fontSize: 9 }}>{idx.nodeId}</div>
@@ -755,6 +810,8 @@ export default function IndexingInAir() {
                   <div
                     key={`d${p}`}
                     data-pos={p}
+                    onMouseEnter={() => setHoveredSlot(p)}
+                    onMouseLeave={() => setHoveredSlot(null)}
                     style={{
                       width: 32,
                       height: 44,
@@ -769,6 +826,7 @@ export default function IndexingInAir() {
                       color: COLORS.text,
                       borderRadius: 2,
                       margin: "0 0.5px",
+                      cursor: "pointer",
                     }}
                   >
                     <div style={{ fontWeight: 600, fontSize: 8 }}>{dat.label}</div>
@@ -779,8 +837,11 @@ export default function IndexingInAir() {
             </div>
           ))}
         </div>
+        <p style={{ fontSize: 9, color: COLORS.textDim, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+          Hover over any slot to see its header info (index_pointer, bcast_pointer)
+        </p>
         {/* Legend */}
-        <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 14, marginTop: 6, flexWrap: "wrap" }}>
           <span style={{ fontSize: 10, color: COLORS.replicated, fontFamily: "'JetBrains Mono', monospace" }}>
             ■ Replicated Index
           </span>
@@ -1152,6 +1213,45 @@ export default function IndexingInAir() {
               </tbody>
             </table>
           </div>
+
+          {/* Broadcast Statistics */}
+          <div style={{ marginTop: 16, borderTop: `1px solid ${COLORS.border}`, paddingTop: 14 }}>
+            <div style={{ ...headingStyle, fontSize: 12, marginBottom: 10 }}>Broadcast Statistics</div>
+            {(() => {
+              const totalIndexSlots = schedule.reduce((a, s) => a + s.indexSegment.length, 0);
+              const totalDataSlots = schedule.reduce((a, s) => a + s.dataSegment.length, 0);
+              const replicatedSlots = schedule.reduce((a, s) => a + s.indexSegment.filter(n => n.replicated).length, 0);
+              const nonReplicatedSlots = totalIndexSlots - replicatedSlots;
+              const indexOverhead = ((totalIndexSlots / totalSlots) * 100).toFixed(1);
+              const treeDepth = treeHeight;
+              const indexSizeFormula = Array.from({length: treeDepth}, (_, i) => Math.pow(fanout, i)).reduce((a, b) => a + b, 0);
+              return (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+                  {[
+                    { label: "|D| (data slots)", value: totalDataSlots, color: COLORS.data, note: "Total data items in broadcast" },
+                    { label: "|I| (index slots)", value: totalIndexSlots, color: COLORS.nonReplicated, note: "Total index slots (replicated + non-replicated)" },
+                    { label: "Replicated slots", value: replicatedSlots, color: COLORS.replicated, note: "Index nodes repeated across segments" },
+                    { label: "Non-replicated slots", value: nonReplicatedSlots, color: COLORS.nonReplicated, note: "Index nodes appearing once" },
+                    { label: "Broadcast length", value: totalSlots, color: COLORS.accent, note: "|D| + |I| = total slots per cycle" },
+                    { label: "Index overhead", value: `${indexOverhead}%`, color: COLORS.highlight, note: "|I| / (|D| + |I|) as percentage" },
+                    { label: "Tree depth (k)", value: treeDepth, color: COLORS.textMuted, note: `k = ceil(log_${fanout}(|D|/C))` },
+                    { label: "Tuning time (theoretical)", value: `1 + k + C = 1 + ${treeDepth} + ${fanout} = ${1 + treeDepth + fanout}`, color: COLORS.active, note: "Initial probe + tree traversal + data read" },
+                  ].map((stat, i) => (
+                    <div key={i} style={{
+                      background: COLORS.bg,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: 6,
+                      padding: "10px 12px",
+                    }}>
+                      <div style={{ fontSize: 9, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.5 }}>{stat.label}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: stat.color, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>{stat.value}</div>
+                      <div style={{ fontSize: 8, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>{stat.note}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -1351,10 +1451,74 @@ export default function IndexingInAir() {
               );
             })}
           </div>
+
+          {/* Performance Metrics Dashboard */}
+          <div style={{ marginTop: 16, borderTop: `1px solid ${COLORS.border}`, paddingTop: 14 }}>
+            <div style={{ ...headingStyle, fontSize: 12, marginBottom: 10 }}>Performance Metrics</div>
+            {(() => {
+              const steps = searchResult.steps;
+              const tuneInPos = steps[0]?.pos ?? 0;
+              const retrievePos = steps[steps.length - 1]?.pos ?? 0;
+              const responseTime = retrievePos - tuneInPos;
+
+              // Probe wait: slots from tune-in to next index segment start
+              const probeStep = steps.find(s => s.action === "doze" && s.step === 2);
+              const indexReadStep = steps.find(s => s.action === "read_index");
+              const probeWait = probeStep ? (probeStep.pos - tuneInPos) : 0;
+
+              // Index read time: slots spent reading index
+              const indexReadTime = indexReadStep ? ((indexReadStep.endPos || indexReadStep.pos) - indexReadStep.pos + 1) : 0;
+
+              // Bcast wait: slots from end of index read to data retrieval
+              const indexEndPos = indexReadStep ? (indexReadStep.endPos || indexReadStep.pos) : tuneInPos;
+              const bcastWait = retrievePos - indexEndPos - 1;
+
+              // Tuning time: count only active slots
+              let tuningTime = 0;
+              for (const s of steps) {
+                if (s.state === "active") {
+                  if (s.endPos !== undefined) {
+                    tuningTime += (s.endPos - s.pos + 1);
+                  } else {
+                    tuningTime += 1;
+                  }
+                }
+              }
+
+              // Doze time
+              const dozeTime = responseTime - tuningTime;
+
+              // Energy savings
+              const energySavings = responseTime > 0 ? ((dozeTime / responseTime) * 100).toFixed(1) : 0;
+
+              return (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                  {[
+                    { label: "Probe Wait", value: `${probeWait} slots`, color: COLORS.doze, note: "Time from tune-in to reaching next index segment. Client dozes during this period." },
+                    { label: "Index Read Time", value: `${indexReadTime} slots`, color: COLORS.active, note: "Slots spent actively reading index nodes (root to leaf traversal)." },
+                    { label: "Bcast Wait", value: `${Math.max(0, bcastWait)} slots`, color: COLORS.doze, note: "Time from finishing index read to data arrival. Client dozes during this period." },
+                    { label: "Tuning Time", value: `${tuningTime} slots`, color: COLORS.active, note: "Total time radio is ON (active). This determines battery drain." },
+                    { label: "Doze Time", value: `${Math.max(0, dozeTime)} slots`, color: COLORS.data, note: "Total time radio is OFF. Battery is conserved." },
+                    { label: "Response Time (Latency)", value: `${responseTime} slots`, color: COLORS.accent, note: "Total elapsed time from tune-in to data retrieval. Response = Probe Wait + Index Read + Bcast Wait + 1." },
+                    { label: "Energy Savings", value: `${energySavings}%`, color: COLORS.highlight, note: "Doze time as percentage of response time. Higher = more battery saved by indexing." },
+                  ].map((stat, i) => (
+                    <div key={i} style={{
+                      background: COLORS.bg,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: 6,
+                      padding: "10px 12px",
+                    }}>
+                      <div style={{ fontSize: 9, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 0.5 }}>{stat.label}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: stat.color, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>{stat.value}</div>
+                      <div style={{ fontSize: 8, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", marginTop: 3 }}>{stat.note}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
-
-      {/* Footer */}
       <div style={{ textAlign: "center", padding: "12px 0", fontSize: 10, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace" }}>
         Partial Replication Indexing in Air — Based on Imielinski, Viswanathan & Badrinath
       </div>
